@@ -14,6 +14,8 @@ import io
 import re
 import zipfile
 
+from PyPDF2 import PdfReader
+
 # special linetype that means that indent contains action and scene lines,
 # and scene lines are the ones that begin with "EXT." or "INT."
 SCENE_ACTION = -2
@@ -738,6 +740,209 @@ def importFountain(fileName, frame, titlePages):
 
     makeLastLBLast()
     return ret, titlePages
+    
+    
+# like importTextFile, but for PDF files.
+def importPDF(fileName: str, frame: wx.Frame)->Optional[List[screenplay.Line]]:
+
+    class PDFLine:
+        def __init__(self, tm, cm, page, text):
+            self.tm = tm
+            self.cm = cm
+            self.page = page
+            self.text = text
+
+        def getX(self):
+            if (len(self.tm) < 5):
+                return 0
+                
+            x = self.tm[4]
+
+            if (len(self.cm) > 4):
+                x = abs(self.cm[4] - x)
+
+            x = round(x)
+            return x
+            
+        def getY(self):
+            if (len(self.tm) < 5):
+                return 0
+                
+            y = self.tm[5]
+
+            if (len(self.cm) > 4):
+                y = abs(self.cm[5] - y)
+
+            y = round(y, 2)
+            return y
+        
+    pdfLines = []
+
+    pagecount = 0
+    def visitor_body(text, cm, tm, fontDict, fontSize):
+        if not text:
+            return
+            
+        line = PDFLine(tm, cm, pagecount, text)
+        
+        # the visitor visits single chars, we append them to the last line untile we meet a line break
+        if len(pdfLines) > 0 and line.getY() == pdfLines[-1].getY() and not (pdfLines[-1].text.endswith('\n') or text.startswith('\n')):
+            pdfLines[-1].text += text
+        else:      
+            pdfLines.append(line)
+
+    reader = PdfReader(fileName)
+    for page in reader.pages:
+        pagecount += 1
+        page.extract_text(visitor_text=visitor_body)
+
+    if pdfLines == None or len(pdfLines) == 0:
+        return None
+
+    # key = indent level, value = Indent
+    indDict = {}
+
+    for i in range(len(pdfLines)):
+        s = pdfLines[i].text
+
+        # don't count empty lines towards indentation statistics
+        if s.strip() == "":
+            continue
+            
+        cnt = pdfLines[i].getX()
+
+        ind = indDict.get(cnt)
+        if not ind:
+            ind = Indent(cnt)
+            indDict[cnt] = ind
+
+        tmp = s.upper()
+
+        if util.multiFind(tmp, ["EXT.", "INT."]):
+            ind.sceneStart += 1
+
+        if util.multiFind(tmp, ["CUT TO:", "DISSOLVE TO:"]):
+            ind.trans += 1
+
+        if re.match(r"^\(.*\)$", tmp):
+            ind.paren += 1
+            
+        if re.match(r"^(\*\s)?\(CONT('|’)D\)$", s.strip()):
+            ind.garbage +=1
+            
+        if s.strip() in ["*"]:
+            ind.garbage +=1
+
+        ind.lines.append(s.lstrip())
+
+    if len(indDict) == 0:
+        wx.MessageBox("File contains only empty lines.", "Error", wx.OK, frame)
+
+        return None
+
+    # first of all: set all indents that contain only garbage to ignored
+    res = 0
+    while res > -1:
+        res = findIndent(indDict, lambda v: v.garbage == len(v.lines) and v.lt != IGNORE)
+        if res > -1:
+            indDict[res].lt = IGNORE
+
+    # scene/action indent
+    setType(SCENE_ACTION, indDict, lambda v: v.sceneStart)
+
+    # indent with most lines is dialogue in non-pure-action scripts
+    setType(screenplay.DIALOGUE, indDict, lambda v: len(v.lines))
+
+    # remaining indent with lines is character most likely
+    setType(screenplay.CHARACTER, indDict, lambda v: len(v.lines))
+
+    # transitions
+    setType(screenplay.TRANSITION, indDict, lambda v: v.trans)
+
+    # parentheticals
+    setType(screenplay.PAREN, indDict, lambda v: v.paren)
+
+    # some text files have this type of parens:
+    #
+    #        JOE
+    #      (smiling and
+    #       hopping along)
+    #
+    # this handles them.
+    parenIndent = findIndent(indDict, lambda v: v.lt == screenplay.PAREN)
+    if parenIndent != -1:
+        paren2Indent = findIndent(indDict,
+            lambda v, var: (v.lt == -1) and (v.indent == var),
+            parenIndent + 1)
+
+        if paren2Indent != -1:
+            indDict[paren2Indent].lt = screenplay.PAREN
+
+    # set line type to ACTION for any indents not recognized
+    for v in indDict.values():
+        if v.lt == -1:
+            v.lt = screenplay.ACTION
+
+    dlg = ImportDlg(frame, list(indDict.values()))
+
+    if dlg.ShowModal() != wx.ID_OK:
+        dlg.Destroy()
+
+        return None
+
+    dlg.Destroy()
+
+    ret = []
+
+    for i in range(len(pdfLines)):
+        s = pdfLines[i].text
+        cnt = pdfLines[i].getX() #util.countInitial(s, " ")
+        s = s.lstrip()
+        sUp = s.upper()
+
+        if s:
+            lt = indDict[cnt].lt
+
+            if lt == IGNORE:
+                continue
+
+            if lt == SCENE_ACTION:
+                if s.startswith("EXT.") or s.startswith("INT."):
+                    lt = screenplay.SCENE
+                else:
+                    lt = screenplay.ACTION
+
+            if ret and (ret[-1].lt != lt):
+                ret[-1].lb = screenplay.LB_LAST
+
+            if lt == screenplay.CHARACTER:
+                if sUp.endswith("(CONT'D)") or sUp.endswith("(CONT’D)"):
+                    s = sUp[:-8].rstrip()
+                
+                if sUp.startswith("(MORE)"):
+                    s = sUp[6:].rstrip()
+
+            elif lt == screenplay.PAREN:
+                if s == "(continuing)":
+                    s = ""
+
+            if s:
+                if ret and ret[-1].lt == screenplay.DIALOGUE and lt == screenplay.DIALOGUE:
+                    ret[-1].text += s
+                else:
+                    line = screenplay.Line(screenplay.LB_SPACE, lt, s)
+                    ret.append(line)
+
+        elif ret:
+            ret[-1].lb = screenplay.LB_LAST
+
+    if len(ret) == 0:
+        ret.append(screenplay.Line(screenplay.LB_LAST, screenplay.ACTION))
+
+    # make sure the last line ends an element
+    ret[-1].lb = screenplay.LB_LAST
+
+    return ret
 
 # import text file from fileName, return list of Line objects for the
 # screenplay or None if something went wrong. returned list always
