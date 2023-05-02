@@ -300,6 +300,8 @@ class MyCtrl(wx.Control):
             lines = myimport.importFDX(fileName, mainFrame)
         elif fileName.endswith("celtx"):
             lines = myimport.importCeltx(fileName, mainFrame)
+        elif fileName.endswith("pdf"):
+            lines = myimport.importPDF(fileName, mainFrame)
         elif fileName.endswith("astx"):
             lines = myimport.importAstx(fileName, mainFrame)
         elif fileName.endswith("fountain"):
@@ -2243,6 +2245,7 @@ class MyFrame(wx.Frame):
             wildcard = "Importable files (*.txt;*.fdx;*.celtx;*.astx;*.fountain;*.fadein)|" +
                        "*.fdx;*.txt;*.celtx;*.astx;*.fountain;*.fadein|" +
                        "Formatted text files (*.txt)|*.txt|" +
+                       "PDF files (*.pdf)|*.pdf|" +
                        "Final Draft XML(*.fdx)|*.fdx|" +
                        "Celtx files (*.celtx)|*.celtx|" +
                        "Adobe Story XML files (*.astx)|*.astx|" +
