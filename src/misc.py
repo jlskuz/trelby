@@ -9,6 +9,8 @@ import os
 import os.path
 import sys
 
+import pathlib
+
 if "TRELBY_TESTING" in os.environ:
     import unittest.mock as mock
     wx = mock.Mock()
@@ -53,7 +55,10 @@ def init(doWX = True):
 
             confPath = str(os.environ["HOME"]) + "/.trelby"
         else:
-            progPath = getPathFromRegistry()
+            if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+                progPath = sys._MEIPASS
+            else:
+                progPath = os.path.abspath(".")
 
             confPath = util.getWindowsUnicodeEnvVar("USERPROFILE") + r"\Trelby\conf"
 

@@ -2653,3 +2653,6 @@ def main():
 
     myApp = MyApp(0)
     myApp.MainLoop()
+
+if __name__ == "__main__":
+    main()
